@@ -6,7 +6,7 @@
 #define PLUGIN_NAME "[SM] Multitool"
 #define PLUGIN_AUTHOR "Drixevel"
 #define PLUGIN_DESCRIPTION ""
-#define PLUGIN_VERSION "1.0.8"
+#define PLUGIN_VERSION "1.0.9"
 #define PLUGIN_URL "https://github.com/drixevel/sm-multitool"
 
 //Includes
@@ -28,13 +28,13 @@
 #define REQUIRE_PLUGIN
 
 #define TAG "[Tools]"
-#define CHAT_TAG "{darkorchid}[{honeydew}Tools{darkorchid}]{whitesmoke}"
 
 //Globals
 ConVar convar_Autoreload;
 ConVar convar_DisableWaitingForPlayers;
 
 EngineVersion game;
+char g_Tag[64];
 char g_ChatColor[32];
 char g_UniqueIdent[32];
 
@@ -108,11 +108,19 @@ public void OnPluginStart()
 	
 	if (IsSource2009())
 	{
+		g_Tag = "{darkorchid}[{honeydew}Tools{darkorchid}]{whitesmoke}";
 		g_ChatColor = "{beige}";
 		g_UniqueIdent = "{ancient}";
 	}
+	else if (game == Engine_Left4Dead2)
+	{
+		g_Tag = "\x03[\x04Tools\x03]\x01";
+		g_ChatColor = "\x03";
+		g_UniqueIdent = "\x04";
+	}
 	else
 	{
+		g_Tag = "{yellow}[{lightred}Tools{yellow}]{default}";
 		g_ChatColor = "{yellow}";
 		g_UniqueIdent = "{lightred}";
 	}
@@ -145,7 +153,7 @@ public void OnPluginStart()
 	RegAdminCmd2("sm_removearmor", Command_RemoveArmor, ADMFLAG_SLAY, "Remove armor from yourself or other clients.");
 	RegAdminCmd2("sm_class", Command_SetClass, ADMFLAG_SLAY, "Sets the class of yourself or other clients.");
 	RegAdminCmd("sm_setclass", Command_SetClass, ADMFLAG_SLAY, "Sets the class of yourself or other clients.");
-	RegAdminCmd2("sm_team", Command_SetTeam, ADMFLAG_SLAY, "Sets the team of yourself or other clients.");
+	RegAdminCmd2("sm_team", Command_Team, ADMFLAG_SLAY, "Sets the team of yourself or other clients and respawns them.");
 	RegAdminCmd("sm_setteam", Command_SetTeam, ADMFLAG_SLAY, "Sets the team of yourself or other clients.");
 	RegAdminCmd("sm_switchteams", Command_SwitchTeams, ADMFLAG_SLAY, "Switches all players on both teams in the same round.");
 	RegAdminCmd2("sm_respawn", Command_Respawn, ADMFLAG_SLAY, "Respawn yourself or clients.");
@@ -217,6 +225,7 @@ public void OnPluginStart()
 	RegAdminCmd2("sm_spewsounds", Command_SpewSounds, ADMFLAG_ROOT, "Logs all sounds played live into chat.");
 	RegAdminCmd2("sm_spewambients", Command_SpewAmbients, ADMFLAG_ROOT, "Logs all ambient sounds played live into chat.");
 	RegAdminCmd2("sm_spewentities", Command_SpewEntities, ADMFLAG_ROOT, "Logs all entities created live into chat.");
+	RegAdminCmd2("sm_getentname", Command_GetEntName, ADMFLAG_ROOT, "Gets the entity name of a certain entity.");
 	RegAdminCmd2("sm_getentmodel", Command_GetEntModel, ADMFLAG_ROOT, "Gets the model of a certain entity if it has a model.");
 	RegAdminCmd2("sm_setkillstreak", Command_SetKillstreak, ADMFLAG_SLAY, "Sets your current killstreak.");
 	RegAdminCmd2("sm_giveweapon", Command_GiveWeapon, ADMFLAG_SLAY, "Give yourself a certain weapon based on index.");
@@ -228,6 +237,8 @@ public void OnPluginStart()
 	RegAdminCmd2("sm_bhop", Command_Bhop, ADMFLAG_SLAY, "Toggles bunnyhopping for one or more players.");
 	RegAdminCmd("sm_bhopping", Command_Bhop, ADMFLAG_SLAY, "Toggles bunnyhopping for one or more players.");
 	RegAdminCmd("sm_bhophopping", Command_Bhop, ADMFLAG_SLAY, "Toggles bunnyhopping for one or more players.");
+	RegAdminCmd2("sm_dummy", Command_SpawnDummy, ADMFLAG_SLAY, "Spawns a target dummy for easy damage testing.");
+	RegAdminCmd("sm_spawndummy", Command_SpawnDummy, ADMFLAG_SLAY, "Spawns a target dummy for easy damage testing.");
 	
 	RegAdminCmd2("sm_createprop", Command_CreateProp, ADMFLAG_ROOT, "Create a dynamic prop entity.");
 	RegAdminCmd2("sm_animateprop", Command_AnimateProp, ADMFLAG_ROOT, "Animate a dynamic prop entity.");
@@ -1067,6 +1078,86 @@ public Action Command_SetClass(int client, int args)
 	return Plugin_Handled;
 }
 
+public Action Command_Team(int client, int args)
+{
+	if (args == 0)
+	{
+		SendPrint(client, "You must specify a target to set their team.");
+		return Plugin_Handled;
+	}
+	else if (args == 1)
+	{
+		SendPrint(client, "You must specify a team to set.");
+		return Plugin_Handled;
+	}
+
+	char sTarget[MAX_TARGET_LENGTH];
+	GetCmdArg(1, sTarget, sizeof(sTarget));
+
+	int targets_list[MAXPLAYERS];
+	char sTargetName[MAX_TARGET_LENGTH];
+	bool tn_is_ml;
+
+	int targets = ProcessTargetString(sTarget, client, targets_list, sizeof(targets_list), COMMAND_FILTER_CONNECTED, sTargetName, sizeof(sTargetName), tn_is_ml);
+
+	if (targets <= 0)
+	{
+		ReplyToTargetError(client, COMMAND_TARGET_NONE);
+		return Plugin_Handled;
+	}
+
+	char sTeam[32];
+	GetCmdArg(2, sTeam, sizeof(sTeam));
+	
+	int team;
+	if (IsStringNumeric(sTeam))
+		team = StringToInt(sTeam);
+	else
+	{
+		if (StrEqual(sTeam, "red", false) || StrEqual(sTeam, "t", false) || StrEqual(sTeam, "terrorist", false))
+			team = 2;
+		else if (StrEqual(sTeam, "blue", false) || StrEqual(sTeam, "ct", false) || StrEqual(sTeam, "counter-terrorist", false))
+			team = 3;
+	}
+
+	if (team < 1 || team > 3)
+	{
+		SendPrint(client, "You have specified an invalid team.");
+		return Plugin_Handled;
+	}
+
+	char sTeamName[32];
+	GetTeamName(team, sTeamName, sizeof(sTeamName));
+
+	for (int i = 0; i < targets; i++)
+	{
+		switch (game)
+		{
+			case Engine_TF2:
+			{
+				TF2_ChangeClientTeam(targets_list[i], view_as<TFTeam>(team));
+				TF2_RespawnPlayer(targets_list[i]);
+			}
+			
+			case Engine_CSS, Engine_CSGO:
+			{
+				CS_SwitchTeam(targets_list[i], team);
+				CS_RespawnPlayer(targets_list[i]);
+			}
+			default: ChangeClientTeam(targets_list[i], team);
+		}
+		
+		SendPrint(targets_list[i], "Your team has been set to [H]%s [D]by [H]%N [D].", sTeamName, client);
+	}
+	
+	if (tn_is_ml)
+		SendPrint(client, "You have set the team of [H]%t [D]to [H]%s [D].", sTargetName, sTeamName);
+	else
+		SendPrint(client, "You have set the team of [H]%s [D]to [H]%s [D].", sTargetName, sTeamName);
+
+	return Plugin_Handled;
+}
+
 public Action Command_SetTeam(int client, int args)
 {
 	if (args == 0)
@@ -1097,7 +1188,17 @@ public Action Command_SetTeam(int client, int args)
 
 	char sTeam[32];
 	GetCmdArg(2, sTeam, sizeof(sTeam));
- 	int team = StringToInt(sTeam);
+	
+	int team;
+	if (IsStringNumeric(sTeam))
+		team = StringToInt(sTeam);
+	else
+	{
+		if (StrEqual(sTeam, "red", false) || StrEqual(sTeam, "t", false) || StrEqual(sTeam, "terrorist", false))
+			team = 2;
+		else if (StrEqual(sTeam, "blue", false) || StrEqual(sTeam, "ct", false) || StrEqual(sTeam, "counter-terrorist", false))
+			team = 3;
+	}
 
 	if (team < 1 || team > 3)
 	{
@@ -1115,13 +1216,11 @@ public Action Command_SetTeam(int client, int args)
 			case Engine_TF2:
 			{
 				TF2_ChangeClientTeam(targets_list[i], view_as<TFTeam>(team));
-				TF2_RegeneratePlayer(targets_list[i]);
 			}
 			
 			case Engine_CSS, Engine_CSGO:
 			{
 				CS_SwitchTeam(targets_list[i], team);
-				CS_UpdateClientModel(targets_list[i]);
 			}
 			default: ChangeClientTeam(targets_list[i], team);
 		}
@@ -3088,6 +3187,23 @@ public void OnEntityCreated(int entity, const char[] classname)
 		SDKHook(entity, SDKHook_StartTouch, OnTriggerTouch);
 }
 
+public Action Command_GetEntName(int client, int args)
+{
+	int target = GetClientAimTarget(client, false);
+	
+	if (!IsValidEntity(target))
+	{
+		SendPrint(client, "Target not found, please aim your crosshair at the entity.");
+		return Plugin_Handled;
+	}
+	
+	char sName[64];
+	GetEntityName(target, sName, sizeof(sName));
+	SendPrint(client, "Entity Name: [H]%s [D]", sName);
+	
+	return Plugin_Handled;
+}
+
 public Action Command_GetEntModel(int client, int args)
 {
 	int target = GetClientAimTarget(client, false);
@@ -3513,8 +3629,8 @@ public Action Command_GiveWeapon(int client, int args)
 {
 	int target = client;
 			
-	if (args > 0)
-		target = GetCmdArgTarget(client, 2);
+	if (args > 1)
+		target = GetCmdArgTarget(client, 1);
 	
 	if (target == -1)
 	{
@@ -4217,16 +4333,16 @@ stock void SendPrint(int client, const char[] format, any ...)
 	if (client == 0)
 	{
 		Format(sBuffer, sizeof(sBuffer), "%s %s", TAG, sBuffer);
-		ReplaceString(sBuffer, sizeof(sBuffer), "[H]", "");
 		ReplaceString(sBuffer, sizeof(sBuffer), "[D]", "");
+		ReplaceString(sBuffer, sizeof(sBuffer), "[H]", "");
 		PrintToServer(sBuffer);
 		return;
 	}
 	
-	Format(sBuffer, sizeof(sBuffer), "%s %s", CHAT_TAG, sBuffer);
+	Format(sBuffer, sizeof(sBuffer), "%s %s", g_Tag, sBuffer);
 	
-	ReplaceString(sBuffer, sizeof(sBuffer), "[H]", "{chartreuse}");
-	ReplaceString(sBuffer, sizeof(sBuffer), "[D]", "{whitesmoke}");
+	ReplaceString(sBuffer, sizeof(sBuffer), "[D]", g_ChatColor);
+	ReplaceString(sBuffer, sizeof(sBuffer), "[H]", g_UniqueIdent);
 	
 	CPrintToChat(client, sBuffer);
 }
@@ -4236,10 +4352,64 @@ stock void SendPrintToAll(const char[] format, any ...)
 	char sBuffer[255];
 	VFormat(sBuffer, sizeof(sBuffer), format, 2);
 	
-	Format(sBuffer, sizeof(sBuffer), "%s %s", CHAT_TAG, sBuffer);
+	Format(sBuffer, sizeof(sBuffer), "%s %s", g_Tag, sBuffer);
 	
-	ReplaceString(sBuffer, sizeof(sBuffer), "[H]", "{chartreuse}");
-	ReplaceString(sBuffer, sizeof(sBuffer), "[D]", "{whitesmoke}");
+	ReplaceString(sBuffer, sizeof(sBuffer), "[D]", g_ChatColor);
+	ReplaceString(sBuffer, sizeof(sBuffer), "[H]", g_UniqueIdent);
 	
 	CPrintToChatAll(sBuffer);
+}
+
+public Action Command_SpawnDummy(int client, int args)
+{
+	float eyePos[3], eyeAng[3], endPos[3];
+	GetClientEyePosition(client, eyePos);
+	GetClientEyeAngles(client, eyeAng);
+	
+	Handle hTrace = TR_TraceRayFilterEx(eyePos, eyeAng, MASK_NPCSOLID, RayType_Infinite, TraceRayDontHitEntity, client);
+	bool hit = TR_DidHit();
+	TR_GetEndPosition(endPos, hTrace);
+	delete hTrace;
+
+	if (!hit)
+	{
+		SendPrint(client, "Cannot spawn a bot in the position you're looking, please aim elsewhere.");
+		return Plugin_Handled;
+	}
+
+	char sName[MAX_NAME_LENGTH];
+	FormatEx(sName, sizeof(sName), "%N's Target Dummy", client);
+
+	int dummy = CreateFakeClient(sName);
+
+	if (dummy < 1)
+	{
+		SendPrint(client, "Unknown error while spawning a target dummy.");
+		return Plugin_Handled;
+	}
+
+	int team = GetClientTeam(client) == 2 ? 3 : 2;
+	ChangeClientTeam(dummy, team);
+	TF2_SetPlayerClass(dummy, TFClass_Heavy);
+	TF2_RespawnPlayer(dummy);
+
+	endPos[2] += 5.0;
+	TeleportEntity(dummy, endPos, NULL_VECTOR, NULL_VECTOR);
+
+	SendPrint(client, "Target dummy has been spawned.");
+	SDKHook(dummy, SDKHook_PreThink, OnDummyThink);
+
+	return Plugin_Handled;
+}
+
+public Action OnDummyThink(int client)
+{
+	SetEntityHealth(client, GetEntProp(client, Prop_Data, "m_iMaxHealth"));
+}
+
+public bool TraceRayDontHitEntity(int entity,int mask,any data)
+{
+	if (entity == data) return false;
+	if (entity != 0) return false;
+	return true;
 }
